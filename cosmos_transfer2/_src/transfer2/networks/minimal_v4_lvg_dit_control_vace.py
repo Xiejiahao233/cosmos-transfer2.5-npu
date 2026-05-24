@@ -17,10 +17,10 @@ import math
 from typing import Any, List, Literal, Optional, Tuple, Union
 
 import megatron.core.parallel_state as parallel_state
+import numpy as np
 import torch
 import torch.amp as amp
 import torch.nn as nn
-import transformer_engine as te
 from einops import rearrange
 from torch.distributed import ProcessGroup, get_process_group_ranks
 from torchvision import transforms
@@ -28,16 +28,62 @@ from torchvision import transforms
 from cosmos_transfer2._src.imaginaire.utils.graph import create_cuda_graph
 from cosmos_transfer2._src.predict2.conditioner import DataType
 from cosmos_transfer2._src.predict2.networks.minimal_v4_dit import (
+    NPU_RMSNorm,
     Attention,
     FinalLayer,
     PatchEmbed,
     SACConfig,
     TimestepEmbedding,
     Timesteps,
-    replace_selfattn_op_with_sparse_attn_op,
 )
 from cosmos_transfer2._src.predict2.networks.minimal_v4_dit import Block as BaseBlock
 from cosmos_transfer2._src.predict2.networks.minimal_v4_dit import MiniTrainDIT as BaseMiniTrainDIT
+from cosmos_transfer2._src.predict2.networks.a2a_cp import NattenA2AAttnOp
+
+
+def replace_selfattn_op_with_sparse_attn_op(model, n_dense_blocks: int = 0, gna_parameters=None):
+    """Replace long self-attention ops in transfer2 model.
+
+    In addition to the default NATTEN replacement provided by predict2, this
+    accepts ``local_attn_op_cls`` in gna_parameters. That path is used for Ascend
+    NPU where CUDA/NATTEN is unavailable, and keeps cross-attention unchanged.
+    """
+    local_attn_op_cls = None
+    if isinstance(gna_parameters, dict):
+        local_attn_op_cls = gna_parameters.get("local_attn_op_cls")
+
+    if local_attn_op_cls is None:
+        from cosmos_transfer2._src.predict2.networks.minimal_v4_dit import (
+            replace_selfattn_op_with_sparse_attn_op as _replace_selfattn_op_with_sparse_attn_op,
+        )
+
+        return _replace_selfattn_op_with_sparse_attn_op(model, n_dense_blocks, natten_parameters=gna_parameters)
+
+    if n_dense_blocks == -1:
+        return model
+
+    num_blocks = len(model.blocks)
+    if n_dense_blocks >= num_blocks:
+        raise ValueError(f"n_dense_blocks ({n_dense_blocks}) must be less than the number of blocks ({num_blocks})")
+
+    dense_indices = set()
+    if n_dense_blocks > 0:
+        if n_dense_blocks == 1:
+            dense_indices.add(num_blocks // 2)
+        else:
+            dense_indices.update(np.linspace(0, num_blocks - 1, n_dense_blocks, dtype=int).tolist())
+
+    chunk_size = gna_parameters.get("chunk_size", 4096)
+    min_seq_len = gna_parameters.get("min_seq_len", 8192)
+    for i, block in enumerate(model.blocks):
+        if i in dense_indices:
+            continue
+        if block.self_attn.backend != "minimal_a2a":
+            raise NotImplementedError(
+                f"Using local sparse attention with attention backend {block.self_attn.backend} is not supported."
+            )
+        block.self_attn.register_module("attn_op", local_attn_op_cls(chunk_size=chunk_size, min_seq_len=min_seq_len))
+    return model
 
 
 class I2VCrossAttentionFull(Attention):
@@ -51,8 +97,8 @@ class I2VCrossAttentionFull(Attention):
         self.k_img = nn.Linear(img_latent_dim, inner_dim, bias=False)
         self.v_img = nn.Linear(img_latent_dim, inner_dim, bias=False)
         self.q_img = nn.Linear(self._query_dim, inner_dim, bias=False)  # NEW: separate query for image attention
-        self.q_img_norm = te.pytorch.RMSNorm(self.head_dim, eps=1e-6)  # NEW: dedicated normalization for q_img
-        self.k_img_norm = te.pytorch.RMSNorm(self.head_dim, eps=1e-6)
+        self.q_img_norm = NPU_RMSNorm(self.head_dim, eps=1e-6)
+        self.k_img_norm = NPU_RMSNorm(self.head_dim, eps=1e-6)
 
     def init_weights(self) -> None:
         super().init_weights()
@@ -459,7 +505,7 @@ class MiniTrainDITImageContext(BaseMiniTrainDIT):
             use_wan_fp32_strategy=use_wan_fp32_strategy,
         )
 
-        self.t_embedding_norm = te.pytorch.RMSNorm(model_channels, eps=1e-6)
+        self.t_embedding_norm = NPU_RMSNorm(model_channels, eps=1e-6)
 
         # Create image context projection with deep support
         if extra_image_context_dim is not None:
@@ -639,7 +685,7 @@ class MinimalV4LVGControlVaceDiT(MiniTrainDITImageContext):
                 Timesteps(self.model_channels),
                 TimestepEmbedding(self.model_channels, self.model_channels, use_adaln_lora=self.use_adaln_lora),
             )
-            self.t_embedding_norm_for_control_branch = te.pytorch.RMSNorm(self.model_channels, eps=1e-6)
+            self.t_embedding_norm_for_control_branch = NPU_RMSNorm(self.model_channels, eps=1e-6)
 
         self.build_patch_embed_vace()
 
@@ -1015,6 +1061,8 @@ class MinimalV4LVGControlVaceDiT(MiniTrainDITImageContext):
 
         with amp.autocast("cuda", enabled=self.use_wan_fp32_strategy, dtype=torch.float32):
             t_embedding_B_T_D, adaln_lora_B_T_3D = self.t_embedder(timesteps_B_T)
+            if t_embedding_B_T_D.dtype == torch.float:
+                t_embedding_B_T_D = t_embedding_B_T_D.to(torch.bfloat16)
             t_embedding_B_T_D = self.t_embedding_norm(t_embedding_B_T_D)
 
             if self.separate_embedders:

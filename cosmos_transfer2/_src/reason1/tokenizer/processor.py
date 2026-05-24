@@ -66,7 +66,8 @@ class Processor:
         else:
             self.is_vision_tokenizer = True
 
-        s3_uri = f"s3://bucket/cosmos_reasoning1/pretrained/Qwen_tokenizer/{name}/"
+        #s3_uri = f"s3://bucket/cosmos_reasoning1/pretrained/Qwen_tokenizer/{name}/"
+        s3_uri = "/home/models/Qwen2.5-VL-7B-Instruct"
         from cosmos_transfer2._src.imaginaire.utils.checkpoint_db import get_checkpoint_path
 
         cache_dir = get_checkpoint_path(s3_uri)

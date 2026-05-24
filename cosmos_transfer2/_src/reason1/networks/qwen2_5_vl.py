@@ -65,7 +65,7 @@ else:
     print("flash_attn_2 not available")
     flash_attn_varlen_func = None
 
-assert is_flash_attn_2_available(), "flash_attn_2 not available. run pip install flash_attn"
+# assert is_flash_attn_2_available(), "flash_attn_2 not available. run pip install flash_attn"
 
 logger = logging.get_logger(__name__)
 
@@ -928,7 +928,7 @@ class Qwen2_5_VLFlashAttention2(Qwen2_5_VLAttention):
             raise NotImplementedError(
                 "CP is not supported for flash attention2, _flash_attention_forward will produce wrong output if query_states is sharded"
             )
-
+        """
         attn_output = _flash_attention_forward(
             query_states,
             key_states,
@@ -940,7 +940,12 @@ class Qwen2_5_VLFlashAttention2(Qwen2_5_VLAttention):
             is_causal=self.is_causal,
             use_top_left_mask=self._flash_attn_uses_top_left_mask,
         )
-
+        """
+        import torch_npu
+        atten_mask_npu = torch.triu(torch.ones([2048, 2048]), diagonal=1).bool().to(query_states.device)
+        scale = 1.0 / math.sqrt(query_states.shape[-1])
+        head_num = query_states.shape[2]
+        attn_output = torch_npu.npu_fusion_attention(query_states, key_states, value_states, head_num, "BSND", keep_prob=1.0, atten_mask=atten_mask_npu, scale=scale, sparse_mode=3)[0]
         attn_output = attn_output.reshape(bsz, q_len, -1).contiguous()
         attn_output = self.o_proj(attn_output)
 

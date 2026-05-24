@@ -508,7 +508,9 @@ class ControlVideo2WorldInference:
                         {"ai_caption": [negative_prompt], "images": None}, input_caption_key="ai_caption"
                     )
                 self.neg_t5_embeddings = neg_text_embeddings
-
+        #print("text_embeddings: ", text_embeddings.to(torch.float).norm(p=1))
+        #import sys
+        #sys.exit()
         # Process image context if provided; else will be None
         log.info("Processing image context if available...")
         with _maybe_get_timer(self.benchmark_timer, "preprocessing"):
@@ -535,6 +537,7 @@ class ControlVideo2WorldInference:
             num_total_frames, num_chunks, num_frames_per_chunk = self._get_num_chunks(
                 input_frames, num_video_frames_per_chunk, num_conditional_frames
             )
+            print(f"num_total_frames:{num_total_frames}, num_chunks:{num_chunks}, num_frames_per_chunk:{num_frames_per_chunk}")
             # Pad input frames if total frames is less than chunk size
             input_frames = self._pad_input_frames(input_frames, num_total_frames, num_video_frames_per_chunk)
             if guided_generation_mask is not None:
@@ -639,6 +642,21 @@ class ControlVideo2WorldInference:
                 seed = random.randint(0, 1000000)
                 log.info(f"Seed: {seed}")
 
+                #print("preprocess text_embeddings: ", text_embeddings.to(torch.float).norm(p=1))
+                #print("neg_t5_text_embeddings: ", data_batch["neg_t5_text_embeddings"].to(torch.float).norm(p=1))
+                #print("t5_text_embeddings: ", data_batch["t5_text_embeddings"].to(torch.float).norm(p=1))
+                # print("control_input_depth: ", data_batch["control_input_depth"].to(torch.float).norm(p=1))
+
+                #print("guidance: ", guidance)
+                #print("seed: ", seed)
+                #print("is_negative_prompt: ", negative_prompt)
+                #print("x_sigma_max: ", x_sigma_max)
+                #print("num_steps: ", num_steps)
+                # num_steps = 1
+                #
+                # start_debug = time.time()
+                # torch.npu.synchronize()
+
                 sample = self.model.generate_samples_from_batch(
                     data_batch,
                     n_sample=1,
@@ -649,10 +667,20 @@ class ControlVideo2WorldInference:
                     sigma_max=sigma_max,
                     num_steps=num_steps,
                 )
+                # print("process sample: ", sample.to(torch.float).norm(p=1))
+                #import sys
+                #sys.exit()
                 video = self.model.decode(sample).cpu()  # Shape: (1, C, T, H, W)
+                # video = self.model.decode(sample)
+
+                # torch.npu.synchronize()
+                # prof.step()  # 与schedule配套使用
+                # prof.stop()  # 结束性能数据采集
+                # print("end:", time.time() - start_debug)
 
                 # For visualization: concatenate condition and input videos with generated video
                 video_cat = video
+                # video_cat = video.cpu()
                 conditions = []
                 if show_input and input_frames is not None:
                     x0 = uint8_to_normalized_float(cur_input_frames, dtype=torch.bfloat16)[None]
@@ -678,7 +706,6 @@ class ControlVideo2WorldInference:
 
                 if show_control_condition:
                     video_cat = torch.cat([*conditions, video_cat], dim=-1)
-
                 if chunk_id == 0:
                     all_chunks.append(video_cat)
                 else:
@@ -707,6 +734,7 @@ class ControlVideo2WorldInference:
                     prev_output = torch.cat([last_frames_uint8, blank_frames], dim=2)
                 end_time = time.perf_counter()
                 time_per_chunk.append(end_time - start_time)
+                # break
 
         with _maybe_get_timer(self.benchmark_timer, "postprocessing"):
             # Concatenate all chunks along time

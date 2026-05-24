@@ -427,6 +427,44 @@ class ControlVideo2WorldModelRectifiedFlow(Video2WorldModelRectifiedFlow):
         else:
             timesteps_iter = tqdm.tqdm(timesteps, desc="Generating samples", total=len(timesteps))
 
+        # # 添加Profiling采集扩展配置参数，详细参数介绍可参考下文的参数说明
+        # import torch_npu
+        # experimental_config = torch_npu.profiler._ExperimentalConfig(
+        #     export_type=[
+        #         torch_npu.profiler.ExportType.Text
+        #     ],
+        #     profiler_level=torch_npu.profiler.ProfilerLevel.Level2,
+        #     mstx=False,  # 原参数名msprof_tx改为mstx，新版本依旧兼容原参数名msprof_tx
+        #     aic_metrics=torch_npu.profiler.AiCMetrics.PipeUtilization,
+        #     l2_cache=False,
+        #     op_attr=False,
+        #     data_simplification=False,
+        #     record_op_args=False,
+        #     gc_detect_threshold=None,
+        #     host_sys=[
+        #         torch_npu.profiler.HostSystem.CPU,
+        #         torch_npu.profiler.HostSystem.MEM],
+        #     sys_io=False,
+        #     sys_interconnection=False
+        # )
+        #
+        # # 添加Profiling采集基础配置参数，详细参数介绍可参考下文的参数说明
+        # prof = torch_npu.profiler.profile(
+        #     activities=[
+        #         torch_npu.profiler.ProfilerActivity.CPU,
+        #         torch_npu.profiler.ProfilerActivity.NPU
+        #     ],
+        #     schedule=torch_npu.profiler.schedule(wait=0, warmup=0, active=1, repeat=1, skip_first=4),
+        #     on_trace_ready=torch_npu.profiler.tensorboard_trace_handler("<profiling_output_dir>"),
+        #     record_shapes=True,
+        #     profile_memory=False,
+        #     with_stack=True,
+        #     with_modules=False,
+        #     with_flops=False,
+        #     experimental_config=experimental_config)
+        #
+        # prof.start()
+
         for num_step, t in enumerate(timesteps_iter):
             latent_model_input = latents
             timestep = [t]
@@ -444,6 +482,8 @@ class ControlVideo2WorldModelRectifiedFlow(Video2WorldModelRectifiedFlow):
                 velocity_pred.unsqueeze(0), t, latents[0].unsqueeze(0), return_dict=False, generator=seed_g
             )[0]
             latents = temp_x0.squeeze(0)
+        #     prof.step()
+        # prof.stop()
 
         if self.net.is_context_parallel_enabled:
             if use_spatial_split:

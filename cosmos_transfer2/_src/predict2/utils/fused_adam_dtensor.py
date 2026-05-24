@@ -14,8 +14,8 @@
 # limitations under the License.
 
 import torch
-import transformer_engine as te
-import transformer_engine_torch as tex
+# import transformer_engine as te
+# import transformer_engine_torch as tex
 
 from cosmos_transfer2._src.imaginaire.utils import distributed, log
 from cosmos_transfer2._src.imaginaire.utils.misc import get_local_tensor_if_DTensor

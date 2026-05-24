@@ -32,6 +32,16 @@ from cosmos_transfer2.config import (
     handle_tyro_exception,
     is_rank0,
 )
+import torch_npu
+from torch_npu.contrib import transfer_to_npu
+
+# 导入工具的数据采集接口
+#from msprobe.pytorch import PrecisionDebugger, seed_all
+
+# 在模型训练开始前固定随机性
+#seed_all()
+# 在模型训练开始前实例化PrecisionDebugger
+#debugger = PrecisionDebugger(config_path="<msprobe_config.json>")
 
 ControlUnion = Annotated[
     Union[
@@ -72,11 +82,52 @@ def main(
         # assert len(inference_samples) > 1, "Benchmarking must be run for more than 1 sample."
     init_output_dir(args.setup.output_dir, profile=args.setup.profile)
 
+    # # 添加Profiling采集扩展配置参数，详细参数介绍可参考下文的参数说明
+    # experimental_config = torch_npu.profiler._ExperimentalConfig(
+    #     export_type=[
+    #         torch_npu.profiler.ExportType.Text
+    #     ],
+    #     profiler_level=torch_npu.profiler.ProfilerLevel.Level1,
+    #     mstx=False,  # 原参数名msprof_tx改为mstx，新版本依旧兼容原参数名msprof_tx
+    #     aic_metrics=torch_npu.profiler.AiCMetrics.AiCoreNone,
+    #     l2_cache=False,
+    #     op_attr=False,
+    #     data_simplification=False,
+    #     record_op_args=False,
+    #     gc_detect_threshold=None,
+    #     host_sys=[
+    #         torch_npu.profiler.HostSystem.CPU,
+    #         torch_npu.profiler.HostSystem.MEM],
+    #     sys_io=False,
+    #     sys_interconnection=False
+    # )
+    #
+    # # 添加Profiling采集基础配置参数，详细参数介绍可参考下文的参数说明
+    # prof = torch_npu.profiler.profile(
+    #     activities=[
+    #         torch_npu.profiler.ProfilerActivity.CPU,
+    #         torch_npu.profiler.ProfilerActivity.NPU
+    #     ],
+    #     # schedule=torch_npu.profiler.schedule(wait=0, warmup=0, active=1, repeat=1, skip_first=1),
+    #     on_trace_ready=torch_npu.profiler.tensorboard_trace_handler("<profiling_output_dir>"),
+    #     record_shapes=True,
+    #     profile_memory=False,
+    #     with_stack=True,
+    #     with_modules=False,
+    #     with_flops=False,
+    #     experimental_config=experimental_config)
+
+
     from cosmos_transfer2.inference import Control2WorldInference
 
     inference = Control2WorldInference(args.setup, batch_hint_keys=batch_hint_keys)
+    #debugger.start(model=inference.inference_pipeline.model)  # 开启数据dump
+    # prof.start()
     inference.generate(inference_samples, output_dir=args.setup.output_dir)
-
+    # prof.step()
+    # prof.stop()
+    #debugger.stop()  # 关闭数据dump，可继续开启数据dump，采集数据会记录在同一个step中
+    #debugger.step()  # 结束数据dump，若继续开启数据dump，采集数据将记录在下一个step中
 
 if __name__ == "__main__":
     init_environment()

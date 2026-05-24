@@ -82,7 +82,8 @@ class TextEncoder:
         from cosmos_transfer2._src.imaginaire.utils.checkpoint_db import get_checkpoint_path
 
         log.info(f"Loading checkpoint from {self.config.ckpt_path}.")
-        ckpt_path = get_checkpoint_path(self.config.ckpt_path)
+        #ckpt_path = get_checkpoint_path(self.config.ckpt_path)
+        ckpt_path = "/home/models/Cosmos-Reason1-7B"
         if torch.distributed.is_initialized():
             torch.distributed.barrier()
             is_fsdp = torch.distributed.get_world_size() > 1

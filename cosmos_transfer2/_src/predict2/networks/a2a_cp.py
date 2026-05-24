@@ -17,6 +17,7 @@
 # MIT License
 
 from typing import Any, Callable, List, Tuple, Union
+import os
 
 import torch
 import torch.distributed as dist
@@ -217,6 +218,65 @@ class MinimalA2AAttnOp(DistributedAttention):
     def forward(self, query: Tensor, key: Tensor, value: Tensor, *args: Any, **kwargs) -> Tensor:
         results = super().forward(query, key, value, *args, **kwargs)
         return rearrange(results, "b ... h l -> b ... (h l)")
+
+
+class LocalWindowA2AAttnOp(MinimalA2AAttnOp):
+    """A2A-compatible attention op that limits large self-attention to local chunks.
+
+    This is a pragmatic Ascend NPU optimization for very long video self-attention.
+    It preserves the MinimalA2AAttnOp interface and keeps cross-attention/global
+    attention unchanged unless Q/K/V have the same long sequence length. The
+    sequence length threshold and chunk size can be overridden with environment
+    variables:
+        COSMOS_LOCAL_ATTN_THRESHOLD (default: 8192)
+        COSMOS_LOCAL_ATTN_CHUNK_SIZE (default: 4096)
+        COSMOS_LOCAL_ATTN_DISABLE=1 to force the original dense path
+    """
+
+    def __init__(self, chunk_size: int = 4096, min_seq_len: int = 8192, *args, **kwargs):
+        super(LocalWindowA2AAttnOp, self).__init__(*args, **kwargs)
+        self.chunk_size = int(os.environ.get("COSMOS_LOCAL_ATTN_CHUNK_SIZE", chunk_size))
+        self.min_seq_len = int(os.environ.get("COSMOS_LOCAL_ATTN_THRESHOLD", min_seq_len))
+        self.disable_local_attn = os.environ.get("COSMOS_LOCAL_ATTN_DISABLE", "0") == "1"
+
+    def _should_use_local_attention(self, query: Tensor, key: Tensor, value: Tensor) -> bool:
+        if self.disable_local_attn:
+            return False
+        if query.ndim != 4 or key.ndim != 4 or value.ndim != 4:
+            return False
+        if not (query.shape == key.shape == value.shape):
+            return False
+        if query.shape[1] < self.min_seq_len:
+            return False
+        if self.chunk_size <= 0 or self.chunk_size >= query.shape[1]:
+            return False
+        return True
+
+    def forward(self, query: Tensor, key: Tensor, value: Tensor, *args: Any, **kwargs) -> Tensor:
+        if not self._should_use_local_attention(query, key, value):
+            return super().forward(query, key, value, *args, **kwargs)
+
+        outputs = []
+        seq_len = query.shape[1]
+        pg = self.pg
+        stream = self.stream
+        self.pg = None
+        self.stream = None
+        try:
+            for start in range(0, seq_len, self.chunk_size):
+                end = min(start + self.chunk_size, seq_len)
+                local_out = super().forward(
+                    query[:, start:end],
+                    key[:, start:end],
+                    value[:, start:end],
+                    *args,
+                    **kwargs,
+                )
+                outputs.append(local_out)
+        finally:
+            self.pg = pg
+            self.stream = stream
+        return torch.cat(outputs, dim=1)
 
 
 class NattenA2AAttnOp(MinimalA2AAttnOp):

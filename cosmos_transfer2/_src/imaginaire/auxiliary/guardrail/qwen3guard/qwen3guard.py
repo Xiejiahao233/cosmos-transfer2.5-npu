@@ -41,7 +41,8 @@ class Qwen3Guard(ContentSafetyGuardrail):
         self.offload_model = offload_model_to_cpu
         self.dtype = torch.bfloat16
 
-        model_id = "Qwen/Qwen3Guard-Gen-0.6B"
+        # model_id = "Qwen/Qwen3Guard-Gen-0.6B"
+        model_id = "/home/models/Qwen3Guard-Gen-0.6B/"
 
         self.model = AutoModelForCausalLM.from_pretrained(model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(model_id)

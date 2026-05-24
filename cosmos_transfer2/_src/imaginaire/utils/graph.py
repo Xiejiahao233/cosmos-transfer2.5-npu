@@ -21,8 +21,8 @@ import torch
 from torch._C import _graph_pool_handle
 from torch.utils._pytree import tree_flatten as _tree_flatten
 from torch.utils._pytree import tree_unflatten as _tree_unflatten
-from transformer_engine.pytorch.distributed import get_all_rng_states, graph_safe_rng_available
-from transformer_engine.pytorch.module.base import TransformerEngineBaseModule
+# from transformer_engine.pytorch.distributed import get_all_rng_states, graph_safe_rng_available
+# from transformer_engine.pytorch.module.base import TransformerEngineBaseModule
 
 from cosmos_transfer2._src.imaginaire.utils import log
 

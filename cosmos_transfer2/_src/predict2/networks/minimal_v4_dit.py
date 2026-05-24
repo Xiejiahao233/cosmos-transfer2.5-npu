@@ -33,7 +33,6 @@ except ImportError:
 import numpy as np
 import torch
 import torch.amp as amp
-import transformer_engine as te
 from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
 from torch import nn
@@ -47,11 +46,6 @@ except ImportError:
     CheckpointPolicy = None
 
 from torchvision import transforms
-
-try:
-    from transformer_engine.pytorch.attention.rope import apply_rotary_pos_emb
-except ImportError:
-    from transformer_engine.pytorch.attention import apply_rotary_pos_emb
 from torch.nn.attention.flex_attention import BlockMask, create_block_mask, flex_attention
 
 from cosmos_transfer2._src.imaginaire.attention import attention
@@ -62,7 +56,15 @@ from cosmos_transfer2._src.predict2.modules.neighborhood_attn import Neighborhoo
 from cosmos_transfer2._src.predict2.networks.a2a_cp import MinimalA2AAttnOp, NattenA2AAttnOp
 from cosmos_transfer2._src.predict2.networks.model_weights_stats import WeightTrainingStat
 from cosmos_transfer2._src.predict2.networks.selective_activation_checkpoint import SACConfig as _SACConfig
+import torch_npu
 
+
+def NPU_apply_rotary_pos_emb(t: torch.Tensor, freqs: torch.Tensor) -> torch.Tensor:
+    freqs = freqs.transpose(1, 0)
+    cos_ = torch.cos(freqs).to(t.dtype)
+    sin_ = torch.sin(freqs).to(t.dtype)
+    output = torch_npu.npu_rotary_mul(t, cos_, sin_)
+    return output
 
 # selective activation checkpoint; only apply to the minimal v4 model. if there are change in the networks, some policy will not work as we expect.
 def predict2_2B_720_context_fn():
@@ -385,6 +387,71 @@ def i4_attention_op(
         return out_B_S_H_D
 
 
+def devices_match(device1: torch.device, device2: torch.device) -> bool:
+    """Whether two devices are the same"""
+    device1 = torch.device(device1)
+    device2 = torch.device(device2)
+    if device1.type != device2.type:
+        return False
+    if device1.type == "cuda":
+        index1 = device1.index
+        index2 = device2.index
+        if index1 == index2:
+            return True
+        if index1 is None:
+            index1 = torch.cuda.current_device()
+        if index2 is None:
+            index2 = torch.cuda.current_device()
+        return index1 == index2
+    return device1 == device2
+
+class NPU_RMSNorm(torch.nn.Module):
+    def __init__(self, dim: int, eps: float = 1e-6):
+        """
+        Initialize the RMSNorm normalization layer.
+
+        Args:
+            dim (int): The dimension of the input tensor.
+            eps (float, optional): A small value added to the denominator for numerical stability. Default is 1e-6.
+
+        Attributes:
+            eps (float): A small value added to the denominator for numerical stability.
+            weight (nn.Parameter): Learnable scaling parameter.
+
+        """
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def reset_parameters(self) -> None:
+        """Initialize parameter buffers and values"""
+
+        # Parameter device
+        weight = self.weight
+        device = weight.device
+
+        # Initialize param buffers
+        if not devices_match(weight.device, device):
+            weight = torch.empty_like(weight, device=device)
+
+        # Save updated parameter
+        if not isinstance(weight, torch.nn.Parameter):
+            weight = torch.nn.Parameter(weight)
+        self.weight = weight
+
+    def forward(self, x):
+        """
+        Forward pass through the RMSNorm layer.
+
+        Args:
+            x (torch.Tensor): The input tensor.
+
+        Returns:
+            torch.Tensor: The output tensor after applying RMSNorm.
+
+        """
+        return torch_npu.npu_rms_norm(x, self.weight, epsilon=self.eps)[0]
+
 class Attention(nn.Module):
     """
     A flexible attention module supporting both self-attention and cross-attention mechanisms.
@@ -451,10 +518,10 @@ class Attention(nn.Module):
         self.use_wan_fp32_strategy = use_wan_fp32_strategy
 
         self.q_proj = nn.Linear(query_dim, inner_dim, bias=False)
-        self.q_norm = te.pytorch.RMSNorm(self.head_dim, eps=1e-6)
+        self.q_norm = NPU_RMSNorm(self.head_dim, eps=1e-6)
 
         self.k_proj = nn.Linear(context_dim, inner_dim, bias=False)
-        self.k_norm = te.pytorch.RMSNorm(self.head_dim, eps=1e-6)
+        self.k_norm = NPU_RMSNorm(self.head_dim, eps=1e-6)
 
         self.v_proj = nn.Linear(context_dim, inner_dim, bias=False)
         self.v_norm = nn.Identity()
@@ -463,16 +530,7 @@ class Attention(nn.Module):
         self.output_dropout = nn.Dropout(dropout) if dropout > 1e-4 else nn.Identity()
 
         if self.backend == "transformer_engine":
-            from transformer_engine.pytorch.attention import DotProductAttention
-
-            self.attn_op = DotProductAttention(
-                self.n_heads,
-                self.head_dim,
-                num_gqa_groups=self.n_heads,
-                attention_dropout=0,
-                qkv_format=qkv_format,
-                attn_mask_type="no_mask",
-            )
+            self.attn_op = torch_attention_op
         elif self.backend == "minimal_a2a":
             self.attn_op = MinimalA2AAttnOp()
         elif self.backend == "torch":
@@ -528,8 +586,8 @@ class Attention(nn.Module):
                 if self.use_wan_fp32_strategy:  # wan will force q and k to fp32 before rotary pos emb
                     q = q.to(torch.float32)
                     k = k.to(torch.float32)
-                q = apply_rotary_pos_emb(q, rope_emb, tensor_format=self.qkv_format, fused=True)
-                k = apply_rotary_pos_emb(k, rope_emb, tensor_format=self.qkv_format, fused=True)
+                q = NPU_apply_rotary_pos_emb(q, rope_emb)
+                k = NPU_apply_rotary_pos_emb(k, rope_emb)
                 if self.use_wan_fp32_strategy:
                     q = q.to(original_dtype)
                     k = k.to(original_dtype)
@@ -585,7 +643,7 @@ class I2VCrossAttention(Attention):
         inner_dim = self.head_dim * self.n_heads
         self.k_img = nn.Linear(img_latent_dim, inner_dim, bias=False)
         self.v_img = nn.Linear(img_latent_dim, inner_dim, bias=False)
-        self.k_img_norm = te.pytorch.RMSNorm(self.head_dim, eps=1e-6)
+        self.k_img_norm = NPU_RMSNorm(self.head_dim, eps=1e-6)
 
     def init_weights(self) -> None:
         super().init_weights()
@@ -1102,6 +1160,7 @@ class FinalLayer(nn.Module):
         adaln_lora_B_T_3D: Optional[torch.Tensor] = None,
     ):
         if self.use_wan_fp32_strategy:
+            emb_B_T_D = emb_B_T_D.to(torch.float)
             assert emb_B_T_D.dtype == torch.float32
         with amp.autocast("cuda", enabled=self.use_wan_fp32_strategy, dtype=torch.float32):
             if self.use_adaln_lora:
@@ -1553,7 +1612,7 @@ class MiniTrainDIT(WeightTrainingStat):
             use_wan_fp32_strategy=self.use_wan_fp32_strategy,
         )
 
-        self.t_embedding_norm = te.pytorch.RMSNorm(model_channels, eps=1e-6)
+        self.t_embedding_norm = NPU_RMSNorm(model_channels, eps=1e-6)
         if extra_image_context_dim is not None:
             self.img_context_proj = nn.Sequential(
                 nn.Linear(

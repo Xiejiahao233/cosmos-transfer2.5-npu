@@ -52,7 +52,13 @@ class Control2WorldInference:
         if len(self.batch_hint_keys) == 1:
             # pyrefly: ignore  # bad-argument-type
             checkpoint = MODEL_CHECKPOINTS[ModelKey(variant=self.batch_hint_keys[0], distilled=self.is_distilled)]
-            self.checkpoint_list = [checkpoint.s3.uri]
+            # self.checkpoint_list = [checkpoint.s3.uri]
+            if self.batch_hint_keys[0] == 'depth':
+                self.checkpoint_list = ["/home/models/Cosmos-Transfer2.5-2B/general/depth/0f214f66-ae98-43cf-ab25-d65d09a7e68f_ema_bf16.pt"]
+            elif self.batch_hint_keys[0] == 'edge':
+                self.checkpoint_list = ["/home/models/Cosmos-Transfer2.5-2B/general/edge/ecd0ba00-d598-4f94-aa09-e8627899c431_ema_bf16.pt"]
+            else:
+                self.checkpoint_list = [checkpoint.s3.uri]
             self.experiment = checkpoint.experiment
             if args.has_checkpoint_override:
                 self.checkpoint_list = [args.checkpoint_path]  # pyrefly: ignore [bad-assignment]
@@ -63,11 +69,19 @@ class Control2WorldInference:
 
         else:
             # Multi-control: load ALL control modalities even if some have control weight = 0
+            """
             self.checkpoint_list = [
                 MODEL_CHECKPOINTS[
                     ModelKey(variant=key, distilled=self.is_distilled)  # pyrefly: ignore [bad-argument-type]
                 ].s3.uri
                 for key in CONTROL_KEYS
+            ]
+            """
+            #CONTROL_KEYS = ["edge", "vis", "depth", "seg"]
+            self.checkpoint_list = ['/home/models/Cosmos-Transfer2.5-2B/general/edge/ecd0ba00-d598-4f94-aa09-e8627899c431_ema_bf16.pt',
+                                    '/home/models/Cosmos-Transfer2.5-2B/general/blur/20d9fd0b-af4c-4cca-ad0b-f9b45f0805f1_ema_bf16.pt',
+                                    '/home/models/Cosmos-Transfer2.5-2B/general/depth/0f214f66-ae98-43cf-ab25-d65d09a7e68f_ema_bf16.pt',
+                                    '/home/models/Cosmos-Transfer2.5-2B/general/seg/fcab44fe-6fe7-492e-b9c6-67ef8c1a52ab_ema_bf16.pt'
             ]
             self.experiment = "multibranch_720p_t24_spaced_layer4_cr1pt1_rectified_flow_inference"
 

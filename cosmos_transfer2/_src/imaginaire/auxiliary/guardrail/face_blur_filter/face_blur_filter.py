@@ -64,7 +64,8 @@ class RetinaFaceFilter(PostprocessingGuardrail):
             confidence_threshold: Minimum confidence score to consider a face detection
             offload_model_to_cpu (bool, optional): Whether to offload the model to CPU. Defaults to True.
         """
-        self.checkpoint = f"{GUARDRAIL1_CHECKPOINT.download()}/face_blur_filter/Resnet50_Final.pth"
+        #self.checkpoint = f"{GUARDRAIL1_CHECKPOINT.download()}/face_blur_filter/Resnet50_Final.pth"
+        self.checkpoint = "/home/models/Cosmos-Guardrail1/face_blur_filter/Resnet50_Final.pth"
         self.cfg = cfg_re50
         self.batch_size = batch_size
         self.confidence_threshold = confidence_threshold

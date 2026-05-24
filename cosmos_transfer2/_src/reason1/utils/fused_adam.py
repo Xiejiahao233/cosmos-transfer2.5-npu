@@ -14,8 +14,8 @@
 # limitations under the License.
 
 import torch
-import transformer_engine as te
-import transformer_engine_torch as tex
+# import transformer_engine as te
+# import transformer_engine_torch as tex
 from torch.distributed._functional_collectives import AsyncCollectiveTensor
 from torch.distributed._tensor.api import DTensor
 

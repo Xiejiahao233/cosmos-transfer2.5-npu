@@ -27,7 +27,8 @@ class SigLIPEncoder(torch.nn.Module):
         super().__init__()
         self.device = device
         self.dtype = dtype
-        model_id = "google/siglip-so400m-patch14-384"
+        #model_id = "google/siglip-so400m-patch14-384"
+        model_id = "/home/models/siglip-so400m-patch14-384/"
         self.model = SiglipModel.from_pretrained(model_id)
         self.processor = SiglipProcessor.from_pretrained(model_id)
         self.model.to(self.device, dtype=self.dtype).eval()

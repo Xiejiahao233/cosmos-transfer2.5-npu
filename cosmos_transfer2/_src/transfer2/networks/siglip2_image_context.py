@@ -33,7 +33,8 @@ class SigLip2EmbImgContext(AbstractEmbModel):
         super().__init__()
         self.num_token = num_token
         self.model_dim = 1152
-        self.model, self.processor = get_siglip2_model_processor("google/siglip2-so400m-patch16-naflex")
+        #self.model, self.processor = get_siglip2_model_processor("google/siglip2-so400m-patch16-naflex")
+        self.model, self.processor = get_siglip2_model_processor("/home/models/siglip2-so400m-patch16-naflex/")
 
         self._input_key = input_key
         self._output_key = output_key

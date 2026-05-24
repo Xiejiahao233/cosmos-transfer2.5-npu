@@ -632,7 +632,8 @@ def _video_vae(
             if not INTERNAL:
                 from cosmos_transfer2._src.imaginaire.utils.checkpoint_db import get_checkpoint_path
 
-                pretrained_path = get_checkpoint_path(pretrained_path)
+                # pretrained_path = get_checkpoint_path(pretrained_path)
+                pretrained_path = "/home/models/Cosmos-Predict2.5-2B/tokenizer.pth"
             if pretrained_path.startswith("s3://"):
                 backend_key = "wan2pt1_vae"
                 easy_io.set_s3_backend(
